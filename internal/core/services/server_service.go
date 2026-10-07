@@ -153,10 +153,41 @@ func (s *serverService) SetPinned(alias string, pinned bool) error {
 	return err
 }
 
+// tmuxSessionName is the remote tmux session interactive connections attach to.
+const tmuxSessionName = "lazyssh"
+
+// tmuxRemoteCommand attaches to (or creates) the remote tmux session so work
+// survives disconnects; it falls back to a login shell when tmux is missing.
+// Wrapped in sh -c so it behaves the same under any remote login shell.
+var tmuxRemoteCommand = "sh -c 'command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s " +
+	tmuxSessionName + " || exec \"${SHELL:-/bin/sh}\" -l'"
+
+// tmuxEnabled reports whether interactive sessions should be wrapped in tmux.
+// Set LAZYSSH_TMUX=0 (or false/off/no) to disable.
+func tmuxEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LAZYSSH_TMUX"))) {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return true
+}
+
+// interactiveSSHArgs builds the ssh arguments for an interactive session to alias.
+func interactiveSSHArgs(extraArgs []string, alias string) []string {
+	args := append([]string{}, extraArgs...)
+	if tmuxEnabled() {
+		args = append(args, "-t", alias, tmuxRemoteCommand)
+	} else {
+		args = append(args, alias)
+	}
+	return args
+}
+
 // SSH starts an interactive SSH session to the given alias using the system's ssh client.
 func (s *serverService) SSH(alias string) error {
-	s.logger.Infow("ssh start", "alias", alias)
-	cmd := exec.Command("ssh", alias)
+	s.logger.Infow("ssh start", "alias", alias, "tmux", tmuxEnabled())
+	// #nosec G204
+	cmd := exec.Command("ssh", interactiveSSHArgs(nil, alias)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -175,11 +206,9 @@ func (s *serverService) SSH(alias string) error {
 
 // SSHWithArgs runs system ssh with provided extra args (e.g., -L/-R/-D) for the given alias.
 func (s *serverService) SSHWithArgs(alias string, extraArgs []string) error {
-	s.logger.Infow("ssh start (with args)", "alias", alias, "args", extraArgs)
-	args := append([]string{}, extraArgs...)
-	args = append(args, alias)
+	s.logger.Infow("ssh start (with args)", "alias", alias, "args", extraArgs, "tmux", tmuxEnabled())
 	// #nosec G204
-	cmd := exec.Command("ssh", args...)
+	cmd := exec.Command("ssh", interactiveSSHArgs(extraArgs, alias)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
