@@ -16,8 +16,16 @@ package services
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestTmuxInstallScriptHasNoSingleQuotes(t *testing.T) {
+	// The script is wrapped in sh -c '...', so a single quote would break it.
+	if strings.Contains(tmuxInstallScript, "'") {
+		t.Fatalf("tmuxInstallScript must not contain single quotes: %s", tmuxInstallScript)
+	}
+}
 
 func TestInteractiveSSHArgs(t *testing.T) {
 	tests := []struct {

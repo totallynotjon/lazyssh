@@ -156,11 +156,39 @@ func (s *serverService) SetPinned(alias string, pinned bool) error {
 // tmuxSessionName is the remote tmux session interactive connections attach to.
 const tmuxSessionName = "lazyssh"
 
+// tmuxNoInstallMarker, when present in the remote home directory, suppresses
+// the install prompt on hosts where the user declined to install tmux.
+const tmuxNoInstallMarker = "$HOME/.lazyssh-no-tmux"
+
+// tmuxInstallScript offers to install tmux with whichever package manager the
+// remote host has, using sudo when not root. Declining writes the marker file.
+var tmuxInstallScript = strings.Join([]string{
+	`if ! command -v tmux >/dev/null 2>&1 && [ ! -e "` + tmuxNoInstallMarker + `" ]; then`,
+	`printf "lazyssh: tmux not found on %s. Install it? [Y/n] " "$(hostname)";`,
+	`read -r ans;`,
+	`case "$ans" in`,
+	`[nN]*) touch "` + tmuxNoInstallMarker + `"; echo "lazyssh: not asking again (rm ` + tmuxNoInstallMarker + ` to re-enable)" ;;`,
+	`*) s=""; [ "$(id -u)" -eq 0 ] || s=sudo;`,
+	`if command -v apt-get >/dev/null 2>&1; then $s apt-get update -q && $s apt-get install -y tmux;`,
+	`elif command -v dnf >/dev/null 2>&1; then $s dnf install -y tmux;`,
+	`elif command -v yum >/dev/null 2>&1; then $s yum install -y tmux;`,
+	`elif command -v apk >/dev/null 2>&1; then $s apk add tmux;`,
+	`elif command -v pacman >/dev/null 2>&1; then $s pacman -S --noconfirm tmux;`,
+	`elif command -v zypper >/dev/null 2>&1; then $s zypper -n install tmux;`,
+	`elif command -v opkg >/dev/null 2>&1; then $s opkg update && $s opkg install tmux;`,
+	`else echo "lazyssh: no supported package manager found";`,
+	`fi ;;`,
+	`esac;`,
+	`fi;`,
+}, " ")
+
 // tmuxRemoteCommand attaches to (or creates) the remote tmux session so work
-// survives disconnects; it falls back to a login shell when tmux is missing.
-// Wrapped in sh -c so it behaves the same under any remote login shell.
-var tmuxRemoteCommand = "sh -c 'command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s " +
-	tmuxSessionName + " || exec \"${SHELL:-/bin/sh}\" -l'"
+// survives disconnects, offering to install tmux first when it is missing and
+// falling back to a login shell otherwise. Wrapped in sh -c so it behaves the
+// same under any remote login shell; the script must not contain single quotes.
+var tmuxRemoteCommand = "sh -c '" + tmuxInstallScript +
+	" command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s " + tmuxSessionName +
+	`; exec "${SHELL:-/bin/sh}" -l'`
 
 // tmuxEnabled reports whether interactive sessions should be wrapped in tmux.
 // Set LAZYSSH_TMUX=0 (or false/off/no) to disable.
